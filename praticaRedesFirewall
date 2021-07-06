@@ -1,0 +1,108 @@
+sudo apt install nginx
+sudo apt install openssh-server
+sudo apt install lynx
+sudo apt install ftp
+sudo apt install iptables
+sudo apt install bind9
+sudo apt install proftpd
+sudo apt install telnetd
+
+ssh host1a@192.168.56.105
+ssh host1b@192.168.57.3
+ssh host2a@192.168.58.3
+ssh host3a@192.168.59.3
+ssh firewall@192.168.60.4
+
+Primeiramente, em cada máquina virtual, vamos realizar
+ as configurações de endereçamento no arquivo:
+sudo vi /etc/netplan/00-installer-config.yaml
+
+Configuração da rede 1 (LAN)
+No host 1A:
+network:
+  ethernets:
+    enp0s9:
+      dhcp4: no
+      addresses: [172.16.1.1/24]
+      gateway4: 172.16.1.254
+  version: 2
+
+  No host 1B:
+  network:
+    ethernets:
+      enp0s9:
+        dhcp4: no
+        addresses: [172.16.1.2/24]
+        gateway4: 172.16.1.254
+    version: 2
+
+Configuração da rede 2 (DMZ)
+network:
+  ethernets:
+    enp0s9:
+      dhcp4: no
+      addresses: [172.16.2.3/24]
+      gateway4: 172.16.2.254
+  version: 2
+
+Configuração da rede 3 (WAN)
+network:
+  ethernets:
+    enp0s3:
+      dhcp4: true
+    enp0s9:
+      dhcp4: no
+      addresses: [172.16.3.1/24]
+      gateway4: 172.16.3.254
+  version: 2
+
+host3a@nakao:~$ route -n
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+0.0.0.0         172.16.3.254    0.0.0.0         UG    0      0        0 enp0s9
+0.0.0.0         10.0.2.2        0.0.0.0         UG    100    0        0 enp0s3
+10.0.2.0        0.0.0.0         255.255.255.0   U     0      0        0 enp0s3
+10.0.2.2        0.0.0.0         255.255.255.255 UH    100    0        0 enp0s3
+172.16.3.0      0.0.0.0         255.255.255.0   U     0      0        0 enp0s9
+host3a@nakao:~$ sudo route del -net 0.0.0.0 gw 172.16.3.254 netmask 0.0.0.0 dev enp0s9
+host3a@nakao:~$ sudo ip route add 172.16.1.0/24 via 172.16.3.254
+host3a@nakao:~$ sudo ip route add 172.16.2.0/24 via 172.16.3.254
+host3a@nakao:~$ sudo iptables -t nat -A POSTROUTING -o enp0s3 -j MASQUERADE
+
+configuração firewall
+network:
+  ethernets:
+    enp0s3://WAN
+      dhcp4: false
+      addresses: [172.16.3.254/24]
+    enp0s9://LAN
+      dhcp4: false
+      addresses: [172.16.1.254/24]
+    enp0s10: //DMZ
+      dhcp4: false
+      addresses: [172.16.2.254/24]      
+  version: 2
+
+Feitas as configurações básicas de rede, agora tornaremos o firewall
+em um roteador, executando o comando, indo no arquivo /etc/sysctl.conf e descomentando a linha:
+net.ipv4.ip_forward=1
+
+Também no firewall, acrescentaremos a regra para que todo pacote que saia para WAN seja máscarado, faremos isso utilizando o comando:
+firewall@nakao:~$ sudo ip route add 0.0.0.0/0 via 172.16.3.1
+firewall@nakao:~$ sudo iptables -t nat -A POSTROUTING -o enp0s3 -j SNAT --to 172.16.3.254
+firewall@nakao:~$ sudo iptables -A FORWARD -j ACCEPT
+firewall@nakao:~$ sudo iptables -A INPUT -p tcp --dport 22 -i enp0s9 -j ACCEPT
+firewall@nakao:~$ sudo iptables -A FORWARD -i enp0s9 -o enp0s9 -j DROP
+firewall@nakao:~$ sudo iptables -A FORWARD -p tcp --dport 53 -o enp0s10 -j ACCEPT
+firewall@nakao:~$ sudo iptables -A FORWARD -p udp --dport 53 -o enp0s10 -j ACCEPT
+firewall@nakao:~$ sudo iptables -A FORWARD -p tcp --dport 80 -o enp0s10 -j ACCEPT
+firewall@nakao:~$ sudo iptables -A FORWARD -p udp --dport 80 -o enp0s10 -j ACCEPT
+firewall@nakao:~$ sudo iptables -A FORWARD -p tcp --dport 22 -i enp0s9 -o enp0s10 -j ACCEPT
+firewall@nakao:~$ sudo iptables -A FORWARD -o enp0s10 -j DROP
+firewall@nakao:~$ sudo iptables -A FORWARD -p tcp --dport 22 -j DROP
+firewall@nakao:~$ sudo iptables -A -tcp --dport 80 OUTPUT -j ACCEPT
+firewall@nakao:~$ sudo iptables -A -tcp --dport 443 OUTPUT -j ACCEPT 
+firewall@nakao:~$ sudo iptables -A -tcp --dport 53 OUTPUT -j ACCEPT 
+firewall@nakao:~$ sudo iptables -A -tcp --dport 20 OUTPUT -j ACCEPT 
+firewall@nakao:~$ sudo iptables -A INPUT -j DROP
+firewall@nakao:~$ sudo iptables -A OUTPUT -j DROP
