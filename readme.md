@@ -104,7 +104,9 @@ network:
 network:
   ethernets:
     enp0s3:
-      dhcp4: true    
+      dhcp4: true  
+    enp0s8://Interface usada para acesso SSH externo a VM
+      dhcp4: true  
   version: 2
 ```
 ## Arquivo /etc/netplan/00-installer-config.yaml do Firewall
@@ -142,13 +144,7 @@ host3a@nakao:~$ sudo ip route add 172.16.2.0/24 via 10.0.2.5
 Chegamos as configurações realizadas no Firewall, para isso criaremos um único arquivo executável que conterá todas políticas de segurança, abaixo segue o arquivo rules.sh, que contém
 as regras do firewall. Iniciamos as regras, sendo:
 * Zerar as tabelas do Firewall
-* Máscarar todo tráfego que sair da LAN, DMZ ou do pŕoprio Firewall
 * Permitir que o host1a acesse o Firewall via ssh
-* Impedir acessos diretos ao Firewall
-* Permitir tráfego encaminhado para o Firewall
-* Permitir que as máquinas da DMZ sejam acessadas somente por máquinas da LAN via SSH
-* Permitir que o host2a (DMZ) seja somente servidor http ou dns
-* Impedir que as LAN's atuem como servidores
 
 ## Arquivo rules.sh
 ```bash
@@ -162,27 +158,6 @@ iptables -t nat -A POSTROUTING -o enp0s8 -j MASQUERADE
 echo "Permitindo acesso ssh pelo host1a"
 iptables -A INPUT -p tcp --dport 22 -i enp0s9 -s 172.16.1.1 -j ACCEPT
 iptables -A INPUT -j DROP
-
-echo "Permitindo que o Firewall se comunique com a LAN via output"
-iptables -A OUTPUT -o enp0s9 -p tcp --sport 22  -j ACCEPT
-iptables -A OUTPUT -j DROP
-
-echo "Permitindo que maquinas da DMZ(net2) possam ser acessados via SSH pelas maquinas da LAN(net1)"
-iptables -A FORWARD -i enp0s9 -o enp0s10 -m state --state NEW,ESTABLISHED,RELATED -p tcp --dport 22 -j ACCEPT
-iptables -A FORWARD -i enp0s10 -o enp0s9 -m state --state ESTABLISHED,RELATED -p tcp --dport 22 -j ACCEPT
-iptables -A FORWARD -i enp0s10 -m state --state ESTABLISHED,RELATED -p tcp --sport 22 -j ACCEPT
-
-echo "Permitindfo que o host3(host2a) seja apenas servidor http ou dns"
-iptables -A FORWARD -o enp0s10 -m state --state NEW,ESTABLISHED,RELATED -p tcp --dport 80 -j ACCEPT
-iptables -A FORWARD -i enp0s10 -m state --state NEW,ESTABLISHED,RELATED -p tcp --sport 80 -j ACCEPT
-
-echo "Permitindo que a LAN seja apenas cliente, nao servidor"
-iptables -A FORWARD -o enp0s9 -m state --state NEW,INVALID -j DROP
-iptables -A FORWARD -i enp0s9 -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
-iptables -A FORWARD -o enp0s9 -m state --state ESTABLISHED,RELATED -j ACCEPT
-
-echo "Permitindo a passagem de trafego encaminhado pelo firewall"
-iptables -A FORWARD -j ACCEPT
 ```
 
 Para executarmos o script, devemos torná-lo um executável e executá-lo, fazendo:
@@ -198,13 +173,18 @@ sudo add-apt-repository ppa:oisf/suricata-stable
 sudo apt-get update
 sudo apt-get install suricata
 sudo apt install jq
+sudo apt install python-pip
+sudo pip install --upgrade suricata-update
+sudo suricata-update
 
 sudo vi /etc/suricata/suricata.yaml
-procurar af-packet, e trocar a interface para a enp0s8
+procurar af-packet, e trocar a interface para a enp0s3
 af-packet:
-  - interface: enp0s3
+  - interface: enp0s8
 pcap:
-  - interface: enp0s3
+  - interface: enp0s8
+
+Além disso, alterar no HOME_NET: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12]"
 ```
 
 # Configuração do Hosts IDS OSSEC na DMZ (host2a)
@@ -259,3 +239,22 @@ host2a@nakao:n
 
 host2a@nakao:~$ sudo /var/ossec/bin/ossec-control start
 ```
+# Teste de ataque no NIDS
+Vamos testar um ataque DDOS usando hping, para tal, de uma máquina externa foi realizado o comando hping. Em um terminal externo, foi realizado o comando hping.
+```bash
+hping3 -S -p 80 --flood --rand-source 192.168.59.3
+```
+Como resultados, podemos dar um cat no arquivo /var/log/suricata/fast.log e temos o resultado
+```bash
+07/09/2021-02:00:05.214244  [**] [1:2400041:2942] ET DROP Spamhaus DROP Listed Traffic Inbound group 42 [**] [Classification: Misc Attack] [Priority: 2] {TCP} 223.169.188.61:2258 -> 192.168.59.3:80
+07/09/2021-02:00:05.425981  [**] [1:2400012:2942] ET DROP Spamhaus DROP Listed Traffic Inbound group 13 [**] [Classification: Misc Attack] [Priority: 2] {TCP} 137.105.29.37:16935 -> 192.168.59.3:80
+07/09/2021-02:00:05.624051  [**] [1:2400001:2942] ET DROP Spamhaus DROP Listed Traffic Inbound group 2 [**] [Classification: Misc Attack] [Priority: 2] {TCP} 42.137.68.196:27632 -> 192.168.59.3:80
+```
+
+# Teste de ataque no HIDS
+ Vamos testar um acesso SSH com uma conta que não exista no HIDS, diversos acessos usando o usuario nao existente fakea foram executados, abaixo os alertas gerados pelo OSSEC.
+ <p>
+  <img src="images/alertaOSEC.png" alt="Cenário proposto" style="width:100%">
+  <p align="center">Figura 1 - Cenário proposto</p>
+</p>
+<br>
